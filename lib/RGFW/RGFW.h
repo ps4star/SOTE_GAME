@@ -269,6 +269,10 @@ int main() {
 	#define RGFW_MIN(x, y) ((x < y) ? x : y)
 #endif
 
+#ifndef RGFW_MAX
+    #define RGFW_MAX(x, y) ((x > y) ? x : y)
+#endif
+
 #ifndef RGFW_ALLOC
 	#include <stdlib.h>
 	#define RGFW_ALLOC malloc

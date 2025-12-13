@@ -1,7 +1,11 @@
 #include "./RGFW/RGFW.h"
 #include "./stb/stb_truetype.h"
+#include "./stb/stb_image_write.h"
+#include "./clay.h"
 #include <stdio.h>
 #include <assert.h>
+#include <limits.h> // For INT_MAX, INT_MIN
+#include <math.h>
 
 #ifdef _MSC_VER
     #include <intrin.h>
@@ -10,22 +14,30 @@
 #endif
 
 #ifndef f32
-typedef float f32;
+    typedef float f32;
 #endif
 #ifndef f64
-typedef double f64;
+    typedef double f64;
 #endif
 #ifndef rune
-typedef i32 rune;
+    typedef i32 rune;
 #endif
 #ifndef true
-#define true (1)
+    #define true (1)
 #endif
 #ifndef false
-#define false (0)
+    #define false (0)
 #endif
 #ifndef bool
-#define bool i32
+    #define bool i32
+#endif
+
+#ifndef STAR_MIN
+	#define STAR_MIN(x, y) ((x < y) ? x : y)
+#endif
+
+#ifndef STAR_MAX
+    #define STAR_MAX(x, y) ((x > y) ? x : y)
 #endif
 
 #define STAR_BYTE 1
@@ -51,8 +63,8 @@ typedef struct star_string {
     i32 len;
 } star_string;
 
-i32 star_cstring_len(u8 *cstring);
-star_string star_string_from_cstring(u8 *cstring);
+i32 star_cstring_len(const char *cstring);
+star_string star_string_from_cstring(const char *cstring);
 
 // Software rendering
 typedef struct star_color {
@@ -95,29 +107,36 @@ typedef struct star_asciifont {
 } star_asciifont;
 
 star_asciifont *star_asciifont_make(u8 *ttf_memory, f32 font_size, star_arena *mem);
-void star_asciifont_draw_text(star_asciifont *f, star_string text, star_render_context *ctx, i32 x, i32 y, i32 letter_spacing, star_color color);
+void star_asciifont_measure_text(star_asciifont *font, star_string str, i32 letter_spacing, i32 *w, i32 *h);
+void star_asciifont_draw_text(star_asciifont *f, star_string text, star_render_context *ctx, i32 x, i32 y, i32 letter_spacing, star_color color, bool bilinear);
 
 void star_init_library(void);
 
-#if 1 // #ifdef PSIVSTAR_IMPLEMENTATION
+#if defined(PSIVSTAR_IMPLEMENTATION) || 1
 u64 star_read_time(void) {
     unsigned int dummy;
-    return __rdtscp(&dummy);
-    return (u64)dummy;
+    return (u64)__rdtscp(&dummy);
 }
 
 star_arena star_arena_make(i32 cap) {
+    assert(cap > 0); // Sanity check: capacity must be positive
     star_arena out = {0};
     out.data = (u8 *)calloc(1, (size_t)cap);
+    assert(out.data != NULL); // Sanity check: allocation must succeed
     out.position = 0;
     out.cap = cap;
     return out;
 }
 
 star_arena star_arena_fork(star_arena *base, i32 sub_cap) {
-    assert(base->position == 0 && sub_cap > 0);
+    assert(base != NULL); // Sanity check: base arena pointer must not be NULL
+    assert(sub_cap > 0); // Sanity check: sub_cap must be positive
+    assert(base->position == 0); // Sanity check: base arena should be unused before forking from it
+    assert(sub_cap <= base->cap); // Sanity check: sub_cap must not exceed base->cap
+
     star_arena out = {0};
     out.data = &base->data[base->cap - sub_cap];
+    assert(out.data != NULL); // Sanity check: data pointer must be valid
     out.cap = sub_cap;
     out.position = 0;
 
@@ -126,28 +145,51 @@ star_arena star_arena_fork(star_arena *base, i32 sub_cap) {
 }
 
 void *star_arena_allocate(star_arena *a, i32 size) {
-    assert(a->position + size < a->cap);
-    size = (size | 63) + 1; // align to 64 bytes
+    assert(a != NULL); // Sanity check: arena pointer must not be NULL
+    assert(a->data != NULL); // Sanity check: arena data pointer must not be NULL
+    assert(size > 0); // Sanity check: allocation size must be positive
+    i32 aligned_size = (size | 63) + 1; // align to 64 bytes
+    assert(a->position + aligned_size <= a->cap); // Sanity check: ensure enough capacity
     void *out = (void *)&a->data[a->position];
-    a->position += size;
+    a->position += aligned_size;
     return out;
 }
 
-i32 star_cstring_len(u8 *cstring) {
-    u8 *c = cstring;
+i32 star_cstring_len(const char *cstring) {
+    assert(cstring != NULL); // Sanity check: cstring pointer must not be NULL
+    u8 *c = (u8 *)cstring;
     i32 res = 0;
     while (*c) c++, res++;
     return res;
 }
 
-star_string star_string_from_cstring(u8 *cstring) {
+star_string star_string_from_cstring(const char *cstring) {
+    assert(cstring != NULL); // Sanity check: cstring pointer must not be NULL
     star_string out;
     out.data = (u8 *)cstring;
     out.len = star_cstring_len(cstring);
     return out;
 }
 
+// Alpha application via Look-Up Table (fastest)
+static u8 g_alpha_lut[256 * 256];
+static void init_alpha_lut(void) {
+    i32 a, c;
+    for (a = 0; a < 256; ++a) {
+        for (c = 0; c < 256; ++c) {
+            // Use whatever formula you like; here: round(c * a / 255)
+            g_alpha_lut[(a << 8) | c] = (u8)(((u32)c * (u32)a + 127) / 255);
+        }
+    }
+}
+
+static inline u8 get_alpha_lut(u8 c, u8 a) {
+    return g_alpha_lut[((u32)a << 8) | (u32)c];
+}
+
 static inline void star_push_clear_rect(star_render_context *ctx, star_rect r) {
+    assert(ctx != NULL); // Sanity check: context pointer must not be NULL
+    assert(ctx->clear_rects_ptr < 1024); // Sanity check: prevent buffer overflow
     ctx->clear_rects[ctx->clear_rects_ptr++] = r;
 }
 
@@ -172,6 +214,7 @@ static inline star_rect star_rect_union(star_rect a, star_rect b) {
 
 // In-place clear rect merging
 i32 star_merge_rects(star_rect *rects, i32 len) {
+    assert(rects != NULL || len == 0); // Sanity check: rects pointer must not be NULL if len > 0
     if (len <= 0) return 0;
     for (i32 i = 0; i < len; ++i) {
         for (i32 j = i + 1; j < len; ) {
@@ -190,6 +233,10 @@ i32 star_merge_rects(star_rect *rects, i32 len) {
 }
 
 static inline void star_clear_rect(star_render_context *ctx, star_rect r) {
+    assert(ctx != NULL); // Sanity check: context pointer must not be NULL
+    assert(ctx->pixels != NULL); // Sanity check: pixels buffer must not be NULL
+    assert(ctx->pixel_w > 0 && ctx->pixel_h > 0); // Sanity check: pixel dimensions must be positive
+
     if (r.x < 0) { r.w += r.x; r.x = 0; }
     if (r.y < 0) { r.h += r.y; r.y = 0; }
 
@@ -215,10 +262,15 @@ static inline void star_clear_rect(star_render_context *ctx, star_rect r) {
 }
 
 void star_begin_drawing(star_render_context *ctx) {
-    i32 total_area = ctx->pixel_w * ctx->pixel_h;
-    i32 clear_area = 0;
+    assert(ctx != NULL); // Sanity check: context pointer must not be NULL
+    assert(ctx->pixels != NULL); // Sanity check: pixels buffer must not be NULL
+    assert(ctx->pixel_w > 0 && ctx->pixel_h > 0); // Sanity check: pixel dimensions must be positive
+
+    u64 total_area = (u64)ctx->pixel_w * (u64)ctx->pixel_h;
+    u64 clear_area = 0;
     for (i32 i = 0; i < ctx->clear_rects_ptr; i++) {
-        clear_area += ctx->clear_rects[i].w * ctx->clear_rects[i].h;
+        // Potential overflow if w*h is very large, but handled by i32 limits
+        clear_area += (u64)ctx->clear_rects[i].w * ctx->clear_rects[i].h;
     }
     if (clear_area * 2 >= total_area) {
         // clear whole screen (>50% is covered by rects anyway)
@@ -235,6 +287,10 @@ void star_begin_drawing(star_render_context *ctx) {
 }
 
 void star_fill_rect(star_render_context *ctx, i32 x, i32 y, i32 rw, i32 rh, star_color color) {
+    assert(ctx != NULL); // Sanity check: context pointer must not be NULL
+    assert(ctx->pixels != NULL); // Sanity check: pixels buffer must not be NULL
+    assert(ctx->pixel_w > 0 && ctx->pixel_h > 0); // Sanity check: pixel dimensions must be positive
+
     i32 w = ctx->pixel_w;
     i32 h = ctx->pixel_h;
     if (x < 0) { rw += x; x = 0; }
@@ -246,13 +302,13 @@ void star_fill_rect(star_render_context *ctx, i32 x, i32 y, i32 rw, i32 rh, star
 
     star_push_clear_rect(ctx, (star_rect){ x, y, rw, rh });
 
-    // Pre-calculate the 3 integers that cover 4 pixels (RGB RGB RGB RGB)
-    u32 c = (u32)color.r | ((u32)color.g << 8) | ((u32)color.b << 16);
-
-    // We need to shift the pattern for the 32-bit writes
-    u32 chunk0 = c | ((u32)color.r << 24);              // R G B R
-    u32 chunk1 = (u32)color.g | ((u32)color.b << 8) | ((u32)color.r << 16) | ((u32)color.g << 24); // G B R G
-    u32 chunk2 = (u32)color.b | ((u32)color.r << 8) | ((u32)color.g << 16) | ((u32)color.b << 24); // B R G B
+    // Pre-calculate the 12 bytes for 4 pixels (RGBRGBRGBRGB)
+    u8 pixel_pattern[12];
+    for (int i = 0; i < 4; ++i) {
+        pixel_pattern[i * 3 + 0] = color.r;
+        pixel_pattern[i * 3 + 1] = color.g;
+        pixel_pattern[i * 3 + 2] = color.b;
+    }
 
     star_color *row = ctx->pixels + y * w + x;
 
@@ -260,11 +316,9 @@ void star_fill_rect(star_render_context *ctx, i32 x, i32 y, i32 rw, i32 rh, star
         u8 *p = (u8*)row;
         i32 count = rw;
 
-        // Fast path: Process 4 pixels at a time
+        // Fast path: Process 4 pixels at a time (12 bytes)
         while (count >= 4) {
-            memcpy(p,     &chunk0, 4);
-            memcpy(p + 4, &chunk1, 4);
-            memcpy(p + 8, &chunk2, 4);
+            memcpy(p, pixel_pattern, 12);
             p += 12;
             count -= 4;
         }
@@ -281,58 +335,232 @@ void star_fill_rect(star_render_context *ctx, i32 x, i32 y, i32 rw, i32 rh, star
 }
 
 star_asciifont *star_asciifont_make(u8 *ttf_memory, f32 font_size, star_arena *mem) {
-    stbtt_bakedchar char_data[96] = {0};
+    assert(ttf_memory != NULL);
+    assert(font_size > 0);
+    assert(mem != NULL);
 
-    star_asciifont *out = (star_asciifont *)star_arena_allocate(mem, sizeof(star_asciifont));
-    i32 bitmap_w = 96 * ((i32)font_size * 2);
-    i32 bitmap_h = ((i32)font_size * 2);
-    out->atlas = (u8 *)star_arena_allocate(mem, bitmap_w * bitmap_h * sizeof(u8));
-    out->atlas_w = bitmap_w;
-    out->atlas_h = bitmap_h;
-
-    // Render chars into our bitmap
-    i32 result = stbtt_BakeFontBitmap(ttf_memory, 0, font_size, out->atlas, out->atlas_w, out->atlas_h, ASCII_START, 128-ASCII_START, char_data);
-    if (result <= 0) {
-        assert(0);
+    star_asciifont *font = (star_asciifont *)star_arena_allocate(mem, sizeof(star_asciifont));
+    if (!font) {
+        return NULL;
     }
 
-    stbtt_InitFont(&out->font_data, ttf_memory, 0);
+    if (!stbtt_InitFont(&font->font_data, ttf_memory, stbtt_GetFontOffsetForIndex(ttf_memory, 0))) {
+        return NULL;
+    }
+
+    font->atlas_w = 1024;
+    font->atlas_h = 1024;
+    font->atlas = (u8 *)star_arena_allocate(mem, font->atlas_w * font->atlas_h);
+    if (!font->atlas) {
+        return NULL;
+    }
+    memset(font->atlas, 0, font->atlas_w * font->atlas_h);
+
+    f32 scale = stbtt_ScaleForPixelHeight(&font->font_data, font_size);
     int ascent, descent, line_gap;
-    stbtt_GetFontVMetrics(&out->font_data, &ascent, &descent, &line_gap);
-    f32 scale = stbtt_ScaleForPixelHeight(&out->font_data, font_size);
+    stbtt_GetFontVMetrics(&font->font_data, &ascent, &descent, &line_gap);
+    font->ascent = (f32)ascent * scale;
+    font->descent = (f32)descent * scale;
+    font->line_gap = (f32)line_gap * scale;
+    font->line_height = font->ascent - font->descent + font->line_gap;
 
-    out->ascent = (f32)ascent * scale;
-    out->descent = (f32)descent * scale;
-    out->line_gap = (f32)line_gap * scale;
-    out->line_height = out->ascent - out->descent + out->line_gap;
+    i32 atlas_x = 1;
+    i32 atlas_y = 1;
+    i32 max_row_h = 0;
 
-    // Bake the chars
-    for (i32 i = 0; i < 128-ASCII_START; i++) {
-        out->glyphs[i].x0 = (i32)char_data[i].x0;
-        out->glyphs[i].x1 = (i32)char_data[i].x1;
-        out->glyphs[i].y0 = (i32)char_data[i].y0;
-        out->glyphs[i].y1 = (i32)char_data[i].y1;
-        out->glyphs[i].xoff = char_data[i].xoff;
-        out->glyphs[i].yoff = char_data[i].yoff;
-        out->glyphs[i].xadvance = char_data[i].xadvance;
-    }
-    return out;
-}
+    for (i32 i = 0; i < 96; i++) { // For ASCII 32 to 127
+        int codepoint = ASCII_START + i;
 
-// Alpha application via Look-Up Table (fastest)
-static u8 g_alpha_lut[256 * 256] __attribute__((aligned(64)));
-static void init_alpha_lut(void) {
-    int a, c;
-    for (a = 0; a < 256; ++a) {
-        for (c = 0; c < 256; ++c) {
-            // Use whatever formula you like; here: round(c * a / 255)
-            g_alpha_lut[(a << 8) | c] = (u8)(((unsigned)c * (unsigned)a + 127) / 255);
+        int glyph_idx = stbtt_FindGlyphIndex(&font->font_data, codepoint);
+        if (glyph_idx == 0) {
+            if (codepoint != '?') {
+                int question_glyph_idx = stbtt_FindGlyphIndex(&font->font_data, '?');
+                if (question_glyph_idx != 0) glyph_idx = question_glyph_idx;
+            }
+             if (glyph_idx == 0) continue;
+        }
+
+        int ix0, iy0, ix1, iy1;
+        stbtt_GetGlyphBitmapBox(&font->font_data, glyph_idx, scale, scale, &ix0, &iy0, &ix1, &iy1);
+
+        int glyph_w = ix1 - ix0;
+        int glyph_h = iy1 - iy0;
+
+        if (atlas_x + glyph_w + 1 >= font->atlas_w) {
+            atlas_x = 1;
+            atlas_y += max_row_h + 1;
+            max_row_h = 0;
+        }
+
+        if (atlas_y + glyph_h + 1 >= font->atlas_h) {
+            assert(0 && "Font atlas is too small");
+            return NULL;
+        }
+
+        if (glyph_w > 0 && glyph_h > 0) {
+            stbtt_MakeGlyphBitmap(&font->font_data,
+                                  font->atlas + atlas_x + (atlas_y * font->atlas_w),
+                                  glyph_w, glyph_h, font->atlas_w,
+                                  scale, scale,
+                                  glyph_idx);
+        }
+
+        font->glyphs[i].x0 = atlas_x;
+        font->glyphs[i].y0 = atlas_y;
+        font->glyphs[i].x1 = atlas_x + glyph_w;
+        font->glyphs[i].y1 = atlas_y + glyph_h;
+
+        font->glyphs[i].xoff = (f32)ix0;
+        font->glyphs[i].yoff = (f32)iy0;
+
+        int advance;
+        stbtt_GetGlyphHMetrics(&font->font_data, glyph_idx, &advance, NULL);
+        font->glyphs[i].xadvance = (f32)advance * scale;
+
+        atlas_x += glyph_w + 1;
+        if (glyph_h > max_row_h) {
+            max_row_h = glyph_h;
         }
     }
+
+    return font;
 }
 
-static inline u8 get_alpha_lut(u8 c, u8 a) {
-    return g_alpha_lut[((unsigned)a << 8) | (unsigned)c];
+void star_asciifont_measure_text(star_asciifont *font, star_string str, i32 letter_spacing, i32 *w, i32 *h) {
+    i32 current_x = 0;
+    i32 current_y = 0;
+    i32 max_line_height = 0;
+
+    for (i32 i = 0; i < str.len; i++) {
+        char c = str.data[i];
+
+        if (c == '\n') {
+            current_x = 0;
+            current_y += font->line_height;
+            continue;
+        }
+
+        star_glyph *glyph = &font->glyphs[(u32)c - ASCII_START];
+        i32 glyph_width = (glyph->x1 - glyph->x0) + letter_spacing;
+
+        current_x += glyph_width;
+        if (current_y + (glyph->y1 - glyph->y0) > max_line_height) {
+            max_line_height = current_y + (glyph->y1 - glyph->y0);
+        }
+    }
+
+    if (w) {
+        *w = current_x;
+    }
+    if (h) {
+        *h = current_y + font->line_height;
+    }
+}
+
+void star_asciifont_draw_text(star_asciifont *f, star_string text, star_render_context *ctx, i32 x, i32 y, i32 letter_spacing, star_color color, bool bilinear) {
+    // Sanity checks
+    assert(f != NULL);
+    assert(f->atlas != NULL);
+    assert(ctx != NULL);
+    assert(ctx->pixels != NULL);
+    assert(f->atlas_w > 0 && f->atlas_h > 0);
+    assert(ctx->pixel_w > 0 && ctx->pixel_h > 0);
+    assert(text.data != NULL || text.len == 0);
+
+    f32 current_x = (f32)x;
+    f32 current_y_baseline = (f32)y + f->ascent;
+
+    i32 min_drawn_x = INT_MAX;
+    i32 min_drawn_y = INT_MAX;
+    i32 max_drawn_x = INT_MIN;
+    i32 max_drawn_y = INT_MIN;
+
+    for (i32 i = 0; i < text.len; ++i) {
+        u8 char_code = text.data[i];
+
+        if (char_code == '\n') {
+            current_x = (f32)x;
+            current_y_baseline += f->line_height;
+            continue;
+        }
+
+        if (char_code < ASCII_START || char_code > 127) {
+            star_glyph *space_glyph = &f->glyphs[' ' - ASCII_START];
+            current_x += space_glyph->xadvance + (f32)letter_spacing;
+            continue;
+        }
+
+        star_glyph *glyph = &f->glyphs[char_code - ASCII_START];
+
+        f32 glyph_screen_x_f = current_x + glyph->xoff;
+        f32 glyph_screen_y_f = current_y_baseline + glyph->yoff;
+
+        i32 glyph_w = glyph->x1 - glyph->x0;
+        i32 glyph_h = glyph->y1 - glyph->y0;
+
+        if (glyph_w <= 0 || glyph_h <= 0) {
+            current_x += glyph->xadvance + (f32)letter_spacing;
+            continue;
+        }
+
+        i32 clip_x_start = STAR_MAX(0, (i32)floorf(glyph_screen_x_f));
+        i32 clip_y_start = STAR_MAX(0, (i32)floorf(glyph_screen_y_f));
+        i32 clip_x_end = STAR_MIN(ctx->pixel_w, (i32)ceilf(glyph_screen_x_f + glyph_w));
+        i32 clip_y_end = STAR_MIN(ctx->pixel_h, (i32)ceilf(glyph_screen_y_f + glyph_h));
+
+        if (clip_x_start < clip_x_end && clip_y_start < clip_y_end) {
+            min_drawn_x = STAR_MIN(min_drawn_x, clip_x_start);
+            min_drawn_y = STAR_MIN(min_drawn_y, clip_y_start);
+            max_drawn_x = STAR_MAX(max_drawn_x, clip_x_end);
+            max_drawn_y = STAR_MAX(max_drawn_y, clip_y_end);
+
+            for (i32 gy = clip_y_start; gy < clip_y_end; ++gy) {
+                for (i32 gx = clip_x_start; gx < clip_x_end; ++gx) {
+                    u8 alpha;
+                    f32 atlas_x_f = (f32)glyph->x0 + ((f32)gx - glyph_screen_x_f);
+                    f32 atlas_y_f = (f32)glyph->y0 + ((f32)gy - glyph_screen_y_f);
+                    i32 ax0 = (i32)floorf(atlas_x_f); i32 ax1 = ax0 + 1;
+                    i32 ay0 = (i32)floorf(atlas_y_f); i32 ay1 = ay0 + 1;
+                    if (bilinear) {
+                        if (ax0 < glyph->x0 || ax1 >= glyph->x1 || ay0 < glyph->y0 || ay1 >= glyph->y1) {
+                            continue;
+                        }
+                         if (ax0 < 0 || ax1 >= f->atlas_w || ay0 < 0 || ay1 >= f->atlas_h) {
+                            continue;
+                        }
+
+                        f32 x_frac = atlas_x_f - (f32)ax0;
+                        f32 y_frac = atlas_y_f - (f32)ay0;
+
+                        u8 a00 = f->atlas[ay0 * f->atlas_w + ax0];
+                        u8 a10 = f->atlas[ay0 * f->atlas_w + ax1];
+                        u8 a01 = f->atlas[ay1 * f->atlas_w + ax0];
+                        u8 a11 = f->atlas[ay1 * f->atlas_w + ax1];
+
+                        f32 top = (f32)a00 * (1.0f - x_frac) + (f32)a10 * x_frac;
+                        f32 bottom = (f32)a01 * (1.0f - x_frac) + (f32)a11 * x_frac;
+                        f32 alpha_f = top * (1.0f - y_frac) + bottom * y_frac;
+                        alpha = (u8)(alpha_f + 0.5f);
+                    } else {
+                        alpha = f->atlas[ay0 * f->atlas_w + ax0];
+                    }
+
+                    if (alpha > 0) {
+                        star_color *target_pixel = &ctx->pixels[gy * ctx->pixel_w + gx];
+                        target_pixel->r = get_alpha_lut(color.r, alpha);
+                        target_pixel->g = get_alpha_lut(color.g, alpha);
+                        target_pixel->b = get_alpha_lut(color.b, alpha);
+                    }
+                }
+            }
+        }
+        current_x += glyph->xadvance + (f32)letter_spacing;
+    }
+
+    if (min_drawn_x != INT_MAX) {
+        star_rect total_rect = {min_drawn_x, min_drawn_y, max_drawn_x - min_drawn_x, max_drawn_y - min_drawn_y};
+        star_push_clear_rect(ctx, total_rect);
+    }
 }
 
 void star_init_library(void) {
