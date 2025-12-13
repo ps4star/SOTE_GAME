@@ -1,6 +1,6 @@
 // The only dependency is RGFW: see top of RGFW.h for compile instructions per each platform (supported are macos/windows/linux)
 // But remove anything OpenGL related from -l options etc since we use software/native rendering only
-// cc Windows: (zig cc) mooncol.c -lgdi32
+// cc Windows: (zig cc) skeleton.c -lgdi32
 
 #include <stdio.h>
 #include <time.h>
