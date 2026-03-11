@@ -3,7 +3,7 @@ import "base:runtime"
 import "core:strings"
 import "core:fmt"
 import "core:slice"
-import "core:time"
+// import "core:time"
 import sa "core:container/small_array"
 
 import "./lib/clay"
@@ -99,7 +99,7 @@ element_render :: proc(cmd: ^clay.RenderCommand) {
     case Element_TitleBackgroundImage:
         prime_background(variant.img)
 
-        _draw_bg :: proc(alpha: f32, override_to_full := false) {
+        draw_bg :: proc(alpha: f32, override_to_full := false) {
             alpha := alpha
             original := alpha
             if override_to_full {
@@ -114,7 +114,7 @@ element_render :: proc(cmd: ^clay.RenderCommand) {
             rl.DrawTexturePro(ctx.background_tex, {0,0,f32(ctx.background_img.rl_img.width),f32(ctx.background_img.rl_img.height)}, dst, {}, 0, rl.Color{255,255,255,u8(255.0 * original)})
         }
 
-        _draw_title_text :: proc(alpha: f32) {
+        draw_title_text :: proc(alpha: f32) {
             TEXT_Y :: f32(80)
             TEXT_SLIDE_IN_LEFT_MARGIN :: f32(12)
             text := strings.clone_to_cstring(i18n_get(.game_title), context.temp_allocator)
@@ -130,16 +130,16 @@ element_render :: proc(cmd: ^clay.RenderCommand) {
         }
 
         if g.title_control.stage == 0 {
-            _draw_bg(g.title_control.progress)
+            draw_bg(g.title_control.progress)
         } else if g.title_control.stage == 1 {
-            _draw_bg(1.0)
-            _draw_title_text(g.title_control.progress)
+            draw_bg(1.0)
+            draw_title_text(g.title_control.progress)
         } else if g.title_control.stage == 2 {
-            _draw_bg(1.0)
-            _draw_title_text(1.0)
+            draw_bg(1.0)
+            draw_title_text(1.0)
         } else if g.title_control.stage == 3 {
-            _draw_title_text(g.title_control.progress)
-            _draw_bg(g.title_control.progress, true)
+            draw_title_text(g.title_control.progress)
+            draw_bg(g.title_control.progress, true)
         }
     
     case Element_TitleButton:
@@ -203,15 +203,15 @@ element_render :: proc(cmd: ^clay.RenderCommand) {
     case Element_MusicEditorPrompt:
         this := &g.music_editor
         wrote_blink := false
-        if g.music_editor.ui.prompt_state == .Typing && this.ui.prompt_blink_timer < 0.5 {
+        if this.ui.prompt_state == .TYPING && this.ui.prompt_blink_timer < 0.5 {
             wrote_blink = true
-            strings.write_rune(&g.music_editor.ui.prompt_contents, cast(rune) '|')
+            strings.write_rune(&this.ui.prompt_contents, (rune)('|'))
         }
 
-        rl.DrawTextEx(g.fonts[FONT_ID_UI].rl_font, strings.clone_to_cstring(strings.to_string(g.music_editor.ui.prompt_contents), context.temp_allocator), {f32(cmd.boundingBox.x), f32(cmd.boundingBox.y)}, f32(g.fonts[FONT_ID_UI].size), 1.0, rl.Color{255,255,255,255})
+        rl.DrawTextEx(g.fonts[FONT_ID_UI].rl_font, strings.clone_to_cstring(strings.to_string(this.ui.prompt_contents), context.temp_allocator), {f32(cmd.boundingBox.x), f32(cmd.boundingBox.y)}, f32(g.fonts[FONT_ID_UI].size), 1.0, rl.Color{255,255,255,255})
 
         if wrote_blink {
-            strings.pop_rune(&g.music_editor.ui.prompt_contents)
+            strings.pop_rune(&this.ui.prompt_contents)
         }
     
     case Element_MusicEditorTrackSurface:

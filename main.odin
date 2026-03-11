@@ -6,12 +6,11 @@ import "core:fmt"
 import "core:slice"
 import "core:mem"
 import "core:time"
-import "core:strings"
+// import "core:strings"
 import "core:log"
-import "core:strconv"
-import "core:terminal"
+// import "core:strconv"
 import fp "core:path/filepath"
-import "core:unicode/utf8"
+// import "core:unicode/utf8"
 import "core:os"
 import "core:encoding/json"
 import sa "core:container/small_array"
@@ -278,7 +277,7 @@ main :: proc() {
                 layout = { sizing = {clay.SizingGrow({}), clay.SizingGrow({})}, layoutDirection = .TopToBottom, childAlignment = {.Left, .Bottom} },
                 custom = element(Element_MusicEditor{}),
             }) {
-                if g.music_editor.ui.view == .SurfaceTrackView {
+                if g.music_editor.ui.view == .SURFACE_TRACK_VIEW {
                     if sa.len(g.music_editor.midi_tracks) > 0 {
                         if clay.UI(clay.ID("music_editor_tracks_container"))({
                             layout = { sizing = {clay.SizingGrow({}), clay.SizingGrow({})}, layoutDirection = .TopToBottom },
@@ -295,7 +294,7 @@ main :: proc() {
                             }
                         }
                     }
-                } else if g.music_editor.ui.view == .TrackView {
+                } else if g.music_editor.ui.view == .TRACK_VIEW {
                     if !(sa.len(g.music_editor.midi_tracks) > 0) {
                         panic("Entered music editor TrackView without any tracks loaded")
                     }

@@ -3,25 +3,25 @@ package sote
 
 import "core:math"
 import sa "core:container/small_array"
-import "core:os"
+// import "core:os"
 import "base:runtime"
 import "base:intrinsics"
 
 import "core:fmt"
 import "core:slice"
-import "core:mem"
-import "core:time"
+// import "core:mem"
+// import "core:time"
 import "core:strings"
-import "core:strconv"
+// import "core:strconv"
 
 import rl "vendor:raylib"
 
 @private PhysicalInputGamepadQuadrant :: enum { DEADZONE = 0, UP, DOWN, LEFT, RIGHT }
 @private PhysicalInputGamepadAxis :: enum { LEFT = 0, RIGHT }
 @private PhysicalInputTriggerType :: enum {
-    Pressed, Held, Released, PressedOrRepeat,
-    InAxisRange, OutAxisRange, EnterAxisRange, ExitAxisRange,
-    PressedWhilePointerInHitbox,
+    PRESSED, HELD, RELEASED,
+    IN_RANGE, OUT_OF_RANGE, ENTER_RANGE, EXIT_RANGE,
+    PRESSED_ON_HITBOX,
 }
 
 @private PhysicalInput_GamepadAxisPosition :: struct {
@@ -54,18 +54,21 @@ import rl "vendor:raylib"
 
 InputSignal :: enum {
     NULL = 0,
-    UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_CONFIRM, UI_BACK,
-    CHARA_MOVEMENT_UP, CHARA_MOVEMENT_DOWN, CHARA_MOVEMENT_LEFT, CHARA_MOVEMENT_RIGHT,
 
-    // Probably only ever used in debug?
-    TEXT_INPUT_BACKSPACE, TEXT_INPUT_BACKSPACE_RELEASED, TEXT_INPUT_SUBMIT,
+    // Group: UI
+    UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_CONFIRM, UI_BACK,
+    // Group: Character movement
+    CHARA_MOVEMENT_UP, CHARA_MOVEMENT_DOWN, CHARA_MOVEMENT_LEFT, CHARA_MOVEMENT_RIGHT,
+    // Group: Text input
+    TEXT_INPUT_BACKSPACE, TEXT_INPUT_BACKSPACE_RELEASED, TEXT_INPUT_SUBMIT, TEXT_INPUT_SHIFT, TEXT_INPUT_CONTROL,
+    // Group: Debug
 }
 InputSignalGroup :: bit_set[InputSignal]
 
 INPUT_GROUP_UI := InputSignalGroup{ .UI_UP, .UI_DOWN, .UI_LEFT, .UI_RIGHT }
 INPUT_GROUP_CHARA_MOVEMENT := InputSignalGroup{ .CHARA_MOVEMENT_UP, .CHARA_MOVEMENT_DOWN, .CHARA_MOVEMENT_LEFT, .CHARA_MOVEMENT_RIGHT }
-INPUT_GROUP_TEXT_INPUT := InputSignalGroup{ .TEXT_INPUT_BACKSPACE, .TEXT_INPUT_BACKSPACE_RELEASED, .TEXT_INPUT_SUBMIT }
-INPUT_GROUP_DEBUG := InputSignalGroup{ .TEXT_INPUT_BACKSPACE, .TEXT_INPUT_BACKSPACE_RELEASED, .TEXT_INPUT_SUBMIT }
+INPUT_GROUP_TEXT_INPUT := InputSignalGroup{ .TEXT_INPUT_BACKSPACE, .TEXT_INPUT_BACKSPACE_RELEASED, .TEXT_INPUT_SUBMIT, .TEXT_INPUT_SHIFT, .TEXT_INPUT_CONTROL, }
+INPUT_GROUP_DEBUG := InputSignalGroup{  }
 
 // what physical inputs can trigger which InputSignal's?
 @private InputBindings :: [InputSignal][]PhysicalInput
@@ -76,186 +79,206 @@ INPUT_GROUP_DEBUG := InputSignalGroup{ .TEXT_INPUT_BACKSPACE, .TEXT_INPUT_BACKSP
 
     .UI_UP = {
         PhysicalInput_GamepadAxisPosition{
-            type = .EnterAxisRange,
+            type = .ENTER_RANGE,
             quad = .UP,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .LEFT_FACE_UP,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .UP,
         },
     },
     .UI_DOWN = {
         PhysicalInput_GamepadAxisPosition{
-            type = .EnterAxisRange,
+            type = .ENTER_RANGE,
             quad = .DOWN,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .LEFT_FACE_DOWN,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .DOWN,
         },
     },
     .UI_LEFT = {
         PhysicalInput_GamepadAxisPosition{
-            type = .EnterAxisRange,
+            type = .ENTER_RANGE,
             quad = .LEFT,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .LEFT_FACE_LEFT,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .LEFT,
         },
     },
     .UI_RIGHT = {
         PhysicalInput_GamepadAxisPosition{
-            type = .EnterAxisRange,
+            type = .ENTER_RANGE,
             quad = .RIGHT,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .LEFT_FACE_RIGHT,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .RIGHT,
         },
     },
     .UI_CONFIRM = {
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .RIGHT_FACE_RIGHT,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .ENTER,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .X,
         },
         PhysicalInput_MouseButton{
-            type = .PressedWhilePointerInHitbox,
+            type = .PRESSED_ON_HITBOX,
             button = .LEFT,
         },
     },
     .UI_BACK = {
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .RIGHT_FACE_DOWN,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .BACKSPACE,
         },
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .Z,
         },
     },
 
     .CHARA_MOVEMENT_UP = {
         PhysicalInput_GamepadAxisPosition{
-            type = .InAxisRange,
+            type = .IN_RANGE,
             quad = .UP,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Held,
+            type = .HELD,
             button = .LEFT_FACE_UP,
         },
         PhysicalInput_Keyboard{
-            type = .Held,
+            type = .HELD,
             key = .UP,
         },
     },
     .CHARA_MOVEMENT_DOWN = {
         PhysicalInput_GamepadAxisPosition{
-            type = .InAxisRange,
+            type = .IN_RANGE,
             quad = .DOWN,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Held,
+            type = .HELD,
             button = .LEFT_FACE_DOWN,
         },
         PhysicalInput_Keyboard{
-            type = .Held,
+            type = .HELD,
             key = .DOWN,
         },
     },
     .CHARA_MOVEMENT_LEFT = {
         PhysicalInput_GamepadAxisPosition{
-            type = .InAxisRange,
+            type = .IN_RANGE,
             quad = .LEFT,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Held,
+            type = .HELD,
             button = .LEFT_FACE_LEFT,
         },
         PhysicalInput_Keyboard{
-            type = .Held,
+            type = .HELD,
             key = .LEFT,
         },
     },
     .CHARA_MOVEMENT_RIGHT = {
         PhysicalInput_GamepadAxisPosition{
-            type = .InAxisRange,
+            type = .IN_RANGE,
             quad = .RIGHT,
             axis = .LEFT,
         },
         PhysicalInput_GamepadButton{
-            type = .Held,
+            type = .HELD,
             button = .LEFT_FACE_RIGHT,
         },
         PhysicalInput_Keyboard{
-            type = .Held,
+            type = .HELD,
             key = .RIGHT,
         },
     },
 
     .TEXT_INPUT_BACKSPACE = {
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .BACKSPACE,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .RIGHT_FACE_DOWN,
         },
     },
     .TEXT_INPUT_BACKSPACE_RELEASED = {
         PhysicalInput_Keyboard{
-            type = .Released,
+            type = .RELEASED,
             key = .BACKSPACE,
         },
         PhysicalInput_GamepadButton{
-            type = .Released,
+            type = .RELEASED,
             button = .RIGHT_FACE_DOWN,
         },
     },
     .TEXT_INPUT_SUBMIT = {
         PhysicalInput_Keyboard{
-            type = .Pressed,
+            type = .PRESSED,
             key = .ENTER,
         },
         PhysicalInput_GamepadButton{
-            type = .Pressed,
+            type = .PRESSED,
             button = .RIGHT_FACE_RIGHT,
+        },
+    },
+    .TEXT_INPUT_SHIFT = {
+        PhysicalInput_Keyboard{
+            type = .HELD,
+            key = .LEFT_SHIFT,
+        },
+        PhysicalInput_Keyboard{
+            type = .HELD,
+            key = .RIGHT_SHIFT,
+        },
+    },
+    .TEXT_INPUT_CONTROL = {
+        PhysicalInput_Keyboard{
+            type = .HELD,
+            key = .LEFT_CONTROL,
+        },
+        PhysicalInput_Keyboard{
+            type = .HELD,
+            key = .RIGHT_CONTROL,
         },
     },
 }
@@ -282,6 +305,7 @@ InputController :: struct {
     // Signaling and physical input ctl
     signals: InputSignalGroup,
     text_input: sa.Small_Array(256, rune),
+    inputs_this_frame: sa.Small_Array(64, PhysicalInput),
     bindings: InputBindings,
     gamepads: [MAX_GAMEPADS]struct {
         available: bool,
@@ -346,13 +370,10 @@ input_controller_get_hitbox :: proc(this: ^InputController, x, y: int) -> ([4]in
 }
 
 input_controller_auto_connect :: proc(this: ^InputController, x, y: int) -> (out: HitboxConnections) {
-    is_valid_index :: proc(this: ^InputController, x, y: int) -> (bool) {
-        if x >= this.hitbox_dimensions[0] || x < 0 || y >= this.hitbox_dimensions[1] || y < 0 {
-            return false
-        }
-        return true
+    is_valid_index :: #force_inline proc(this: ^InputController, x, y: int) -> (bool) {
+        return !(x >= this.hitbox_dimensions[0] || x < 0 || y >= this.hitbox_dimensions[1] || y < 0)
     }
-    out = {}
+    // out = {}
     if is_valid_index(this, x+1, y) { out += { .RIGHT }     }
     if is_valid_index(this, x-1, y) { out += { .LEFT }      }
     if is_valid_index(this, x, y+1) { out += { .DOWN }      }
@@ -360,11 +381,17 @@ input_controller_auto_connect :: proc(this: ^InputController, x, y: int) -> (out
     return
 }
 
-// debug text input
-input_controller_get_text_input_as_string :: proc(this: ^InputController, talloc: runtime.Allocator) -> (string) {
+input_controller_get_text_input_as_string :: #force_inline proc(this: ^InputController, talloc: runtime.Allocator) -> (string) {
     sb := strings.builder_make_len_cap(0, 256, talloc)
     for r in sa.slice(&this.text_input) { strings.write_rune(&sb, r) }
     return strings.to_string(sb)
+}
+
+input_controller_text_input_includes :: #force_inline proc(this: ^InputController, r: rune) -> (bool) {
+    for input_r in sa.slice(&this.text_input) {
+        if input_r == r { return true }
+    }
+    return false
 }
 
 // PERF
@@ -373,6 +400,7 @@ input_controller_get_text_input_as_string :: proc(this: ^InputController, talloc
 input_controller_gather_signals :: proc(this: ^InputController) {
     this.signals = {}
     sa.clear(&this.text_input)
+    sa.clear(&this.inputs_this_frame)
     any_gamepad_in_quad :: proc(this: ^InputController, quad: PhysicalInputGamepadQuadrant, axis: PhysicalInputGamepadAxis) -> (bool) {
         for i := 0; i < MAX_GAMEPADS; i += 1 {
             if !this.gamepads[i].available { continue }
@@ -445,21 +473,22 @@ input_controller_gather_signals :: proc(this: ^InputController) {
             c_axis := 0
             this_gp.last_quad = this_gp.quad
             for c_axis < 2 {
-                determine_quad :: proc(pos_x, pos_y: f32) -> (PhysicalInputGamepadQuadrant) {
-                    in_deadzone :: proc(pos: f32) -> (bool) {
+                determine_quad :: proc(this: ^InputController, pos_x, pos_y: f32) -> (PhysicalInputGamepadQuadrant) {
+                    // TODO: replace DEADZONE with this.deadzone customizable variable
+                    in_deadzone :: proc(this: ^InputController, pos: f32) -> (bool) {
                         return !((pos > 0 && pos > DEADZONE) || (pos < 0 && pos < -DEADZONE))
                     }
 
-                    if in_deadzone(pos_x) && in_deadzone(pos_y) { return .DEADZONE }
-                    else if in_deadzone(pos_x) { return (pos_y > 0 ? .DOWN : .UP) }
-                    else if in_deadzone(pos_y) { return (pos_x > 0 ? .RIGHT : .LEFT) }
+                    if in_deadzone(this, pos_x) && in_deadzone(this, pos_y) { return .DEADZONE }
+                    else if in_deadzone(this, pos_x) { return (pos_y > 0 ? .DOWN : .UP) }
+                    else if in_deadzone(this, pos_y) { return (pos_x > 0 ? .RIGHT : .LEFT) }
                     return .DEADZONE
                 }
                 list: []rl.GamepadAxis = (c_axis == 0 ? LEFT_AXES[:] : RIGHT_AXES[:])
                 which_axis: PhysicalInputGamepadAxis = (c_axis == 0 ? .LEFT : .RIGHT)
                 pos_x := rl.GetGamepadAxisMovement(i32(i), list[0])
                 pos_y := rl.GetGamepadAxisMovement(i32(i), list[1])
-                q := determine_quad(pos_x, pos_y)
+                q := determine_quad(this, pos_x, pos_y)
 
                 // Only set quad upon transition from DEADZONE <-> NON-DEADZONE
                 if q == .DEADZONE {
@@ -494,57 +523,59 @@ input_controller_gather_signals :: proc(this: ^InputController) {
         for &point in sig {
             switch v in point {
             case PhysicalInput_GamepadAxisPosition:
-                assert(v.type == .InAxisRange || v.type == .OutAxisRange || v.type == .EnterAxisRange || v.type == .ExitAxisRange)
+                assert(v.type == .IN_RANGE || v.type == .OUT_OF_RANGE || v.type == .ENTER_RANGE || v.type == .EXIT_RANGE)
                 cond := false
-                if v.type == .InAxisRange {
+                if v.type == .IN_RANGE {
                     cond = any_gamepad_in_quad(this, v.quad, v.axis)
-                } else if v.type == .OutAxisRange {
+                } else if v.type == .OUT_OF_RANGE {
                     cond = !any_gamepad_in_quad(this, v.quad, v.axis)
-                } else if v.type == .EnterAxisRange {
+                } else if v.type == .ENTER_RANGE {
                     cond = any_gamepad_entered_quad(this, v.quad, v.axis)
-                } else if v.type == .ExitAxisRange {
+                } else if v.type == .EXIT_RANGE {
                     cond = any_gamepad_exited_quad(this, v.quad, v.axis)
                 }
                 toggle(this, key, cond)
             case PhysicalInput_GamepadButton:
-                assert(v.type == .Pressed || v.type == .Held || v.type == .Released)
+                assert(v.type == .PRESSED || v.type == .HELD || v.type == .RELEASED)
                 cond := false
-                if v.type == .Pressed {
+                if v.type == .PRESSED {
                     cond = any_gamepad_button_pressed(this, v.button)
-                } else if v.type == .Held {
+                } else if v.type == .HELD {
                     cond = any_gamepad_button_held(this, v.button)
-                } else if v.type == .Released {
+                } else if v.type == .RELEASED {
                     cond = any_gamepad_button_released(this, v.button)
                 }
                 toggle(this, key, cond)
             case PhysicalInput_Keyboard:
-                assert(v.type == .Pressed || v.type == .Held || v.type == .Released || v.type == .PressedOrRepeat)
+                assert(v.type == .PRESSED || v.type == .HELD || v.type == .RELEASED)
                 cond := false
-                if v.type == .Pressed {
+                if v.type == .PRESSED {
                     cond = rl.IsKeyPressed(v.key)
-                } else if v.type == .Held {
+                } else if v.type == .HELD {
                     cond = rl.IsKeyDown(v.key)
-                } else if v.type == .Released {
+                } else if v.type == .RELEASED {
                     cond = rl.IsKeyReleased(v.key)
-                } else if v.type == .PressedOrRepeat {
-                    cond = rl.IsKeyPressed(v.key) || rl.IsKeyPressedRepeat(v.key)
                 }
                 toggle(this, key, cond)
             case PhysicalInput_MouseButton:
-                assert(v.type == .Pressed || v.type == .Held || v.type == .Released || v.type == .PressedWhilePointerInHitbox)
+                assert(v.type == .PRESSED || v.type == .HELD || v.type == .RELEASED || v.type == .PRESSED_ON_HITBOX)
                 cond := false
-                if v.type == .Pressed {
+                if v.type == .PRESSED {
                     cond = rl.IsMouseButtonPressed(v.button)
-                } else if v.type == .Held {
+                } else if v.type == .HELD {
                     cond = rl.IsMouseButtonDown(v.button)
-                } else if v.type == .Released {
+                } else if v.type == .RELEASED {
                     cond = rl.IsMouseButtonReleased(v.button)
-                } else if v.type == .PressedWhilePointerInHitbox {
+                } else if v.type == .PRESSED_ON_HITBOX {
                     cond = rl.IsMouseButtonPressed(v.button) && this.pointer_on_any_hitbox
                 }
                 toggle(this, key, cond)
             }
         }
+    }
+
+    when DEBUG {
+        // if this.signals > {} do fmt.println(this.signals)
     }
 }
 

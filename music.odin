@@ -1,19 +1,18 @@
 #+feature dynamic-literals
 package sote
 import "base:runtime"
-import "core:mem"
+// import "core:mem"
 import "core:unicode/utf8"
 import "base:intrinsics"
 
 import "core:fmt"
-import "core:mem/virtual"
+// import "core:mem/virtual"
 import "core:strings"
 import sa "core:container/small_array"
-import "core:os"
+// import "core:os"
 
 import ma "vendor:miniaudio"
-
-MusicEditorNote :: int
+import mus "./lib/muslib"
 
 @private music_editor_cache_midi_track_len :: proc(this: ^MusicEditor, slot: int) {
     assert(slot < sa.len(this.midi_tracks))
@@ -26,7 +25,7 @@ MusicEditorNote :: int
     trk.cached_length = length
 }
 
-@private music_editor_input_note :: proc(this: ^MusicEditor, slot: int, note: MusicEditorNote, channel: int, deltas_before: f32, velocity: f32) {
+@private music_editor_input_note :: proc(this: ^MusicEditor, slot: int, note: mus.Note, channel: int, length: f32, velocity: f32) {
     assert(slot < sa.len(this.midi_tracks))
     trk := sa.get_ptr(&this.midi_tracks, slot)
 
@@ -39,7 +38,7 @@ MusicEditorNote :: int
     append(&trk.events, MusicEditorMIDIEvent{
         note_off = note,
         channel = channel,
-        deltas_before = deltas_before,
+        deltas_before = length,
         velocity = velocity,
     })
 }
@@ -54,16 +53,25 @@ music_editor_cmd_new_track :: proc(this: ^MusicEditor, line: string) {
         cached_length = 0.0,
         events = make([dynamic]MusicEditorMIDIEvent, 0, 1024, this.allocator),
     })
-    music_editor_input_note(this, sa.len(this.midi_tracks)-1, MusicEditorNote(64), 0, 1.0, 0.5)
+    music_editor_input_note(this, sa.len(this.midi_tracks)-1, mus.note_from_string("C4"), 0, 1.0, 0.5)
     music_editor_cache_midi_track_len(this, sa.len(this.midi_tracks)-1)
     strings.builder_destroy(&sb)
 }
 
+// SURFACE_TRACK_VIEW: enter into currently selected track
 music_editor_cmd_enter :: proc(this: ^MusicEditor, line: string) {
-    if this.ui.view == .SurfaceTrackView {
-        this.ui.view = .TrackView
+    if this.ui.view == .SURFACE_TRACK_VIEW {
+        this.ui.view = .TRACK_VIEW
     }
 }
+
+// TRACK_VIEW: input a line of Linum note data
+// Linum documentation: https://linum-notation.org/docs
+music_editor_cmd_linum :: proc(this: ^MusicEditor, line: string) {
+
+}
+
+
 
 MusicEditorCommandProc :: proc(this: ^MusicEditor, line: string)
 MusicEditorCommandDefinition :: struct {
@@ -80,8 +88,8 @@ MusicEditorCommandDefinition :: struct {
 
 MusicEditorMIDIEvent :: struct {
     deltas_before: f32,
-    note_on: MusicEditorNote,
-    note_off: MusicEditorNote,
+    note_on: mus.Note,
+    note_off: mus.Note,
     channel: int,
     velocity: f32,
 }
@@ -97,20 +105,22 @@ MusicEditorMIDITrack :: struct {
 }
 
 MusicEditorPromptState :: enum {
-    NoPrompt = 0,
-    Typing,
-    ShowErrorMessage,
+    NO_PROMPT = 0,
+    TYPING,
+    SHOW_ERROR_MESSAGE,
 }
 
 MusicEditorView :: enum {
-    SurfaceTrackView,
-    TrackView,
-    PatchView,
+    SURFACE_TRACK_VIEW,
+    TRACK_VIEW,
+    PATCH_VIEW,
 }
 
 MusicEditor :: struct {
     allocator: runtime.Allocator,
     midi_tracks: sa.Small_Array(512, MusicEditorMIDITrack),
+
+    linum_parser: mus.LinumParser,
 
     ui: struct {
         enabled: bool,
@@ -136,7 +146,7 @@ MusicEditor :: struct {
 }
 
 @private begin_prompt :: proc(this: ^MusicEditor) {
-    this.ui.prompt_state = .Typing
+    this.ui.prompt_state = .TYPING
     this.ui.prompt_blink_timer = 0.0
     strings.builder_reset(&this.ui.prompt_contents)
     strings.write_rune(&this.ui.prompt_contents, cast(rune) ':')
@@ -144,7 +154,7 @@ MusicEditor :: struct {
 
 @private exit_prompt :: #force_inline proc(this: ^MusicEditor) {
     turbo_timer_stop(&this.ui.prompt_backspace_turbo_timer)
-    this.ui.prompt_state = .NoPrompt
+    this.ui.prompt_state = .NO_PROMPT
     strings.builder_reset(&this.ui.prompt_contents)
 }
 
@@ -163,18 +173,18 @@ MusicEditor :: struct {
 }
 
 @private submit_line :: proc(this: ^MusicEditor) {
-    if this.ui.prompt_state == .ShowErrorMessage {
-        this.ui.prompt_state = .Typing
+    if this.ui.prompt_state == .SHOW_ERROR_MESSAGE {
+        this.ui.prompt_state = .TYPING
         return
     }
-    if this.ui.prompt_state == .NoPrompt {
+    if this.ui.prompt_state == .NO_PROMPT {
         panic("called submit_line with no prompt")
     }
 
     // Add to history
     str := strings.clone(strings.to_string(this.ui.prompt_contents), this.allocator)
     strings.builder_reset(&this.ui.prompt_contents)
-    this.ui.prompt_state = .NoPrompt
+    this.ui.prompt_state = .NO_PROMPT
 
     idx := 1
     for idx < len(str) {
@@ -184,6 +194,7 @@ MusicEditor :: struct {
         }
         idx += sz
     }
+    if idx > len(str) { return }
     cmd_part := str[1:idx]
 
     // Skip whitespace until first actual argument
@@ -251,11 +262,13 @@ music_editor_init :: proc(this: ^MusicEditor, allocator: runtime.Allocator, ui_e
     this^ = {}
     this.allocator = allocator
     this.ui.enabled = ui_enabled
-    this.ui.prompt_contents = strings.builder_make_len_cap(0, 4096, this.allocator)
-    this.ui.prompt_history_buffer = make([dynamic]string, 0, 1024, this.allocator)
-    this.ui.prompt_history_cursor = -1
-    this.ui.note_cursor = -1
-    this.ui.track_cursor = -1
+    if this.ui.enabled {
+        this.ui.prompt_contents = strings.builder_make_len_cap(0, 4096, this.allocator)
+        this.ui.prompt_history_buffer = make([dynamic]string, 0, 1024, this.allocator)
+        this.ui.prompt_history_cursor = -1
+        this.ui.note_cursor = -1
+        this.ui.track_cursor = -1
+    }
 
     this.playback.absolute_clock = 0.0
     this.playback.enabled = false
@@ -276,19 +289,17 @@ music_editor_init :: proc(this: ^MusicEditor, allocator: runtime.Allocator, ui_e
 }
 
 music_editor_tick :: proc(this: ^MusicEditor) {
-    update_prompt: if this.ui.enabled {
+    update_ui: if this.ui.enabled {
+        // update_prompt
         BACKSPACE_TURBO_SPEED :: 2
         input_as_string := input_controller_get_text_input_as_string(&g.input_ctl, context.temp_allocator)
-        if len(input_as_string) > 0 {
-            // fmt.println(input_as_string)
-        }
-        if this.ui.prompt_state == .NoPrompt {
+        if this.ui.prompt_state == .NO_PROMPT {
             turbo_timer_stop(&this.ui.prompt_backspace_turbo_timer)
             if strings.index_rune(input_as_string, (rune)(':')) > -1 {
                 begin_prompt(this)
                 return
             }
-        } else if this.ui.prompt_state == .Typing {
+        } else if this.ui.prompt_state == .TYPING {
             input_controller_capture(&g.input_ctl, INPUT_GROUP_UI)
             if input_controller_has_signal(&g.input_ctl, .TEXT_INPUT_SUBMIT) {
                 submit_line(this)
@@ -309,28 +320,27 @@ music_editor_tick :: proc(this: ^MusicEditor) {
             if len(input_as_string) > 0 {
                 add_string_to_prompt(this, input_as_string)
             }
-        } else if this.ui.prompt_state == .ShowErrorMessage {
+        } else if this.ui.prompt_state == .SHOW_ERROR_MESSAGE {
             // TODO: implement show error message thing
             turbo_timer_stop(&this.ui.prompt_backspace_turbo_timer)
         }
-    }
 
-    update_view: if this.ui.enabled {
-        if this.ui.view == .SurfaceTrackView {
+        // update_view
+        if this.ui.view == .SURFACE_TRACK_VIEW {
             if input_controller_has_signal(&g.input_ctl, .UI_CONFIRM) {
                 if this.ui.track_cursor >= 0 {
-                    this.ui.view = .TrackView
+                    this.ui.view = .TRACK_VIEW
                     return
                 }
             }
-        } else if this.ui.view == .TrackView {
+        } else if this.ui.view == .TRACK_VIEW {
 
-        } else if this.ui.view == .PatchView {
+        } else if this.ui.view == .PATCH_VIEW {
 
         }
     }
 }
 
-music_editor_toggle_playback :: proc(this: ^MusicEditor, playback: bool) {
-    this.playback.enabled = playback
-}
+// music_editor_set_playback_enabled :: proc(this: ^MusicEditor, enabled: bool) {
+//     this.playback.enabled = enabled
+// }

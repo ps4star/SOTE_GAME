@@ -1,13 +1,13 @@
 package sote
-import "base:runtime"
-import "vendor:ENet"
+// import "base:runtime"
+// import "vendor:ENet"
 import "base:intrinsics"
 
 import "core:fmt"
-import "core:strings"
+// import "core:strings"
 import sa "core:container/small_array"
 
-import rl "vendor:raylib"
+// import rl "vendor:raylib"
 
 BATTLE_FADE_SPEED :: 1.25
 PARTY_FADE_SPEED :: 1.6
