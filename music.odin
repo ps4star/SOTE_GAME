@@ -189,7 +189,7 @@ MusicEditor :: struct {
     // Skip whitespace until first actual argument
     for idx < len(str) {
         r, sz := utf8.decode_rune_in_string(str[idx:])
-        if !(r == ' ' || r == '\t' || r == '\n' || r == '\r') {
+        if !strings.is_space(r) {
             break
         }
         idx += sz
