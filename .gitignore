@@ -5,3 +5,5 @@
 ./dev_materials
 ./dev_materials/**/*
 ./dev_materials/*
+
+./lib/muslib/_debug.odin

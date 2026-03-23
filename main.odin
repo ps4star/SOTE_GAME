@@ -18,6 +18,8 @@ import sa "core:container/small_array"
 import "./lib/clay"
 import rl "vendor:raylib"
 
+import mus "./lib/muslib"
+
 /*
 There are two layers of saved information.
 There's a huge list of save files (MAX_SAVES)
@@ -82,7 +84,7 @@ Globals :: struct {
     title_control: TitleScreenController,
     settings_control: SettingsMenuController,
     battle_control: BattleController,
-    music_editor: MusicEditor,
+    music_editor: Music_Editor,
     scene: Scene,
 
     // UI State
@@ -109,6 +111,7 @@ main :: proc() {
 
     preload_runtime_init: {
         input_controller_init_default(&g.input_ctl)
+        mus.register_custom_nodes()
     }
 
     g.sdata.save = DEFAULT_SAVE
@@ -278,12 +281,12 @@ main :: proc() {
                 custom = element(Element_MusicEditor{}),
             }) {
                 if g.music_editor.ui.view == .SURFACE_TRACK_VIEW {
-                    if sa.len(g.music_editor.midi_tracks) > 0 {
+                    if len(g.music_editor.piece.tracks) > 0 {
                         if clay.UI(clay.ID("music_editor_tracks_container"))({
                             layout = { sizing = {clay.SizingGrow({}), clay.SizingGrow({})}, layoutDirection = .TopToBottom },
                             custom = element(Element_MusicEditorFrame{}),
                         }) {
-                            for midi_trk, index in sa.slice(&g.music_editor.midi_tracks) {
+                            for midi_trk, index in g.music_editor.piece.tracks {
                                 MIDI_TRACK_H :: 64
                                 if clay.UI(clay.ID("music_editor_track_n", u32(index)))({
                                     layout = { sizing = {clay.SizingGrow({}), clay.SizingFixed(MIDI_TRACK_H)} },
@@ -295,7 +298,7 @@ main :: proc() {
                         }
                     }
                 } else if g.music_editor.ui.view == .TRACK_VIEW {
-                    if !(sa.len(g.music_editor.midi_tracks) > 0) {
+                    if !(len(g.music_editor.piece.tracks) > 0) {
                         panic("Entered music editor TrackView without any tracks loaded")
                     }
 

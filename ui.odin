@@ -219,7 +219,7 @@ element_render :: proc(cmd: ^clay.RenderCommand) {
         bb := [4]int{ int(cmd.boundingBox.x), int(cmd.boundingBox.y), int(cmd.boundingBox.width), int(cmd.boundingBox.height) }
 
         if variant.index == 0 {
-            input_controller_set_hitbox_dimensions(&g.input_ctl, 1,sa.len(this.midi_tracks))
+            input_controller_set_hitbox_dimensions(&g.input_ctl, 1,len(this.piece.tracks))
         }
         input_controller_buffer_hitbox(&g.input_ctl, 0,variant.index, bb, input_controller_auto_connect(&g.input_ctl, 0,variant.index))
 
