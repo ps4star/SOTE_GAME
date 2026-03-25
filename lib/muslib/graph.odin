@@ -25,14 +25,9 @@ spec_byte_size_of_frame :: proc(audio_spec: Audio_Spec) -> (int) {
     return sz
 }
 
-Node_Variant_Identity :: struct {}
-Node_Variant :: union {
-    Node_Variant_Identity,
-}
-
 Generic_Node :: struct {
     using base: ma.node_base,
-    variant: Node_Variant,
+    user_ptr: rawptr,
 }
 
 Node_Instance :: struct {
