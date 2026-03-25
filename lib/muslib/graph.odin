@@ -15,6 +15,16 @@ Audio_Spec :: struct {
     sample_rate: int,
 }
 
+spec_byte_size_of_frame :: proc(audio_spec: Audio_Spec) -> (int) {
+    sz := 0
+    #partial switch audio_spec.format {
+    case .f32:
+        sz += size_of(f32)
+    }
+    sz *= audio_spec.channels
+    return sz
+}
+
 Node_Variant_Identity :: struct {}
 Node_Variant :: union {
     Node_Variant_Identity,
